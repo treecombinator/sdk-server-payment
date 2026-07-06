@@ -4,6 +4,8 @@ import type { Payment } from "../port";
 export interface StripeConfig {
   secretKey: string;
   webhookSecret: string;
+  /** Max accepted age (seconds) of a webhook's signed timestamp — blocks replay. Default 300. */
+  webhookToleranceSec?: number;
 }
 
 async function hmacSha256Hex(secret: string, data: string): Promise<string> {
@@ -42,28 +44,42 @@ export function createStripePayment(config: StripeConfig): Payment {
         },
         body,
       });
-      const json = (await res.json()) as { url?: string; error?: unknown };
-      if (!res.ok || !json.url) {
+      const text = await res.text();
+      let json: { url?: string; error?: unknown } | undefined;
+      try {
+        json = JSON.parse(text) as { url?: string; error?: unknown };
+      } catch {
+        // Non-JSON body (proxy error page, HTML) — fall through to the typed error below.
+      }
+      if (!res.ok || !json?.url) {
         throw new TcError("payment_link_failed", "could not create the hosted payment link", {
-          provider: json.error ?? json,
+          provider: json?.error ?? json ?? text,
         });
       }
       return json.url;
     },
 
     async parseWebhook(body, signature) {
-      // Stripe-Signature header: "t=<timestamp>,v1=<signature>"
-      const fields = new Map(
-        signature.split(",").map((p) => {
-          const [k, ...rest] = p.split("=");
-          return [k?.trim() ?? "", rest.join("=").trim()] as const;
-        }),
-      );
-      const t = fields.get("t");
-      const v1 = fields.get("v1");
-      if (!t || !v1) throw new TcError("webhook_signature_invalid", "webhook signature missing");
+      // Stripe-Signature header: "t=<timestamp>,v1=<sig>" — secret rotation sends several v1 entries.
+      let t: string | undefined;
+      const v1s: string[] = [];
+      for (const part of signature.split(",")) {
+        const [k, ...rest] = part.split("=");
+        const key = k?.trim();
+        if (key === "t") t = rest.join("=").trim();
+        else if (key === "v1") v1s.push(rest.join("=").trim());
+      }
+      if (!t || v1s.length === 0) throw new TcError("webhook_signature_invalid", "webhook signature missing");
       const expected = await hmacSha256Hex(config.webhookSecret, `${t}.${body}`);
-      if (!timingSafeEqual(expected, v1)) throw new TcError("webhook_signature_invalid", "webhook signature mismatch");
+      if (!v1s.some((v1) => timingSafeEqual(expected, v1))) {
+        throw new TcError("webhook_signature_invalid", "webhook signature mismatch");
+      }
+      // The timestamp is signed; rejecting old ones blocks replay of a captured webhook.
+      const toleranceSec = config.webhookToleranceSec ?? 300;
+      const age = Math.abs(Math.floor(Date.now() / 1000) - Number(t));
+      if (!Number.isFinite(age) || age > toleranceSec) {
+        throw new TcError("webhook_signature_expired", `webhook timestamp outside the ${toleranceSec}s tolerance`);
+      }
       const event = JSON.parse(body) as { type?: string; id?: string };
       return { type: event.type ?? "unknown", id: event.id ?? "", raw: event };
     },

@@ -48,13 +48,15 @@ if (event.type === "checkout.session.completed") {
 }
 ```
 
-`createPayment({ secretKey, webhookSecret })` returns the payment API:
+`createPayment({ secretKey, webhookSecret, webhookToleranceSec? })` returns the payment API:
 
 - `createPaymentLink(input)` — open a provider-hosted checkout session and return the redirect URL.
   `input` is `{ amount, currency, successUrl, cancelUrl, description?, customerEmail?, metadata? }`,
   with `amount` in the smallest currency unit.
-- `parseWebhook(body, signature)` — verify the provider's HMAC-SHA256 signature over the raw body,
-  then parse it into a `PaymentEvent` `{ type, id, raw }`.
+- `parseWebhook(body, signature)` — verify the provider's HMAC-SHA256 signature over the raw body
+  (any of the header's `v1` entries may match, so secret rotation works), reject signed timestamps
+  older than `webhookToleranceSec` (default 300s — blocks replay of a captured webhook), then parse
+  it into a `PaymentEvent` `{ type, id, raw }`.
 
 The package also exports the wire types `CheckoutInput`, `PaymentEvent`, `Payment`, and the adapter
 config `StripeConfig`.
@@ -64,7 +66,8 @@ config `StripeConfig`.
 - Pass `parseWebhook` the **raw** request body, exactly as received — any reserialization breaks the
   signature. The `signature` argument is the `Stripe-Signature` header.
 - Errors are `TcError` (from `@treecombinator/sdk-common`) with specific codes:
-  `payment_link_failed` when the provider rejects the checkout request, and
-  `webhook_signature_invalid` when the webhook signature is missing or does not match.
+  `payment_link_failed` when the provider rejects the checkout request,
+  `webhook_signature_invalid` when the webhook signature is missing or does not match, and
+  `webhook_signature_expired` when the signed timestamp falls outside the tolerance window.
 - Signature verification uses HMAC-SHA256 via Web Crypto and a constant-time compare, so it runs on
   any standard runtime with no extra dependency.
