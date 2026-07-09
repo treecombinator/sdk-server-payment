@@ -8,9 +8,11 @@ export interface StripeConfig {
   webhookToleranceSec?: number;
 }
 
+const encoder = new TextEncoder();
+
 async function hmacSha256Hex(secret: string, data: string): Promise<string> {
-  const key = await crypto.subtle.importKey("raw", new TextEncoder().encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
-  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(data)));
+  const key = await crypto.subtle.importKey("raw", encoder.encode(secret), { name: "HMAC", hash: "SHA-256" }, false, ["sign"]);
+  const sig = new Uint8Array(await crypto.subtle.sign("HMAC", key, encoder.encode(data)));
   return [...sig].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
