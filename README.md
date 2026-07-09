@@ -17,7 +17,7 @@ Checkout, driven over `fetch` with Web Crypto for signature verification — dep
 ## Install
 
 ```bash
-npm install github:treecombinator/sdk-server-payment
+givo add @treecombinator/sdk-server-payment
 ```
 
 ## Use
